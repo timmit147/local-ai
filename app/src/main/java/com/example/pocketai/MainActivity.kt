@@ -1,17 +1,12 @@
 package com.example.pocketai
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -27,7 +22,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -37,11 +31,9 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private const val DOWNLOAD_WORK_NAME = "pocket-ai-model-download"
-private const val AI_QUEUE_NAME = "pocket-ai-ai-queue"
+import java.util.UUID
 
 private data class ChatMessage(
     val text: String,
@@ -65,112 +57,36 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PocketAiApp() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val workManager = remember(context) {
         WorkManager.getInstance(context)
     }
-
-    val keyboard = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
 
     val modelFile = remember(context) {
         ModelDownloadWorker.modelFile(context)
     }
 
+    var modelReady by remember {
+        mutableStateOf(
+            modelFile.exists() &&
+                modelFile.length() > 100_000_000L
+        )
+    }
+
     var input by remember { mutableStateOf("") }
-    var downloadInfo by remember { mutableStateOf<WorkInfo?>(null) }
-    var taskInfos by remember { mutableStateOf<List<WorkInfo>>(emptyList()) }
+    var downloading by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
 
-    val notificationPermissionLauncher =
-        rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { }
-
-    LaunchedEffect(Unit) {
-        if (
-            Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(
-                Manifest.permission.POST_NOTIFICATIONS
-            )
-        }
-    }
-
-    // Observe persisted work so the UI can recover after reopening the app.
-    LaunchedEffect(workManager) {
-        while (isActive) {
-            val results = withContext(Dispatchers.IO) {
-                val download = workManager
-                    .getWorkInfosForUniqueWork(DOWNLOAD_WORK_NAME)
-                    .get()
-                    .firstOrNull()
-
-                val tasks = workManager
-                    .getWorkInfosByTag(AiTaskWorker.TAG)
-                    .get()
-
-                download to tasks
-            }
-
-            downloadInfo = results.first
-            taskInfos = results.second.sortedBy { it.id.toString() }
-
-            delay(1000)
-        }
-    }
-
-    val modelReady = modelFile.exists() &&
-        modelFile.length() > 100_000_000L
-
-    val downloadState = downloadInfo?.state
-    val downloading = downloadState == WorkInfo.State.RUNNING
-    val downloadQueued =
-        downloadState == WorkInfo.State.ENQUEUED ||
-        downloadState == WorkInfo.State.BLOCKED
-
-    val downloadProgress =
-        downloadInfo?.progress?.getInt("progress", 0) ?: 0
-
-    val messages = buildList {
-        add(
+    val messages = remember {
+        mutableStateListOf(
             ChatMessage(
-                "Welcome to Pocket AI. Download the model once, " +
-                    "then send prompts. Background tasks can continue " +
-                    "when you leave the screen.",
+                "Welcome to Pocket AI! Download the model to start chatting offline.",
                 false
             )
         )
-
-        taskInfos.forEach { info ->
-            val prompt = info.inputData.getString(
-                AiTaskWorker.KEY_PROMPT
-            ) ?: return@forEach
-
-            add(ChatMessage(prompt, true))
-
-            val answer = when (info.state) {
-                WorkInfo.State.SUCCEEDED ->
-                    info.outputData.getString(AiTaskWorker.KEY_ANSWER)
-                        ?: "Task completed, but no answer was returned."
-
-                WorkInfo.State.FAILED ->
-                    "Task failed: " +
-                        (info.outputData.getString(AiTaskWorker.KEY_ERROR)
-                            ?: "Unknown error")
-
-                WorkInfo.State.CANCELLED -> "Task cancelled."
-
-                WorkInfo.State.RUNNING -> "Working in the background…"
-
-                WorkInfo.State.ENQUEUED,
-                WorkInfo.State.BLOCKED -> "Queued for background processing…"
-            }
-
-            add(ChatMessage(answer, false))
-        }
     }
 
     MaterialTheme(
@@ -193,54 +109,115 @@ private fun PocketAiApp() {
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
-                    "Pocket AI",
+                    text = "Pocket AI",
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
 
                 Text(
-                    "Local AI · Background task queue",
+                    text = "Your private, on-device assistant",
                     color = Color(0xFFB7BAC4),
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                    modifier = Modifier.padding(
+                        top = 4.dp,
+                        bottom = 12.dp
+                    )
                 )
 
                 Button(
-                    enabled = !modelReady &&
-                        !downloading &&
-                        !downloadQueued,
+                    enabled = !downloading && !busy && !modelReady,
                     onClick = {
-                        val request =
-                            OneTimeWorkRequestBuilder<ModelDownloadWorker>()
-                                .setConstraints(
-                                    Constraints.Builder()
-                                        .setRequiredNetworkType(
-                                            NetworkType.UNMETERED
+                        scope.launch {
+                            downloading = true
+                            downloadProgress = 0
+
+                            try {
+                                val request =
+                                    OneTimeWorkRequestBuilder<ModelDownloadWorker>()
+                                        .setConstraints(
+                                            Constraints.Builder()
+                                                .setRequiredNetworkType(
+                                                    NetworkType.CONNECTED
+                                                )
+                                                .build()
                                         )
                                         .build()
-                                )
-                                .addTag(ModelDownloadWorker.TAG)
-                                .build()
 
-                        workManager.enqueueUniqueWork(
-                            DOWNLOAD_WORK_NAME,
-                            ExistingWorkPolicy.KEEP,
-                            request
-                        )
+                                workManager.enqueueUniqueWork(
+                                    "pocket-ai-model-download",
+                                    ExistingWorkPolicy.REPLACE,
+                                    request
+                                )
+
+                                monitorWork(
+                                    workManager = workManager,
+                                    workId = request.id,
+                                    onUpdate = { info ->
+                                        if (info != null) {
+                                            downloadProgress =
+                                                info.progress.getInt(
+                                                    "progress",
+                                                    downloadProgress
+                                                )
+                                        }
+                                    }
+                                )
+
+                                val finalInfo =
+                                    getWorkInfo(workManager, request.id)
+
+                                if (
+                                    finalInfo?.state ==
+                                    WorkInfo.State.SUCCEEDED &&
+                                    modelFile.exists() &&
+                                    modelFile.length() > 100_000_000L
+                                ) {
+                                    modelReady = true
+                                    downloadProgress = 100
+                                    messages.add(
+                                        ChatMessage(
+                                            "AI model downloaded. You can now chat offline.",
+                                            false
+                                        )
+                                    )
+                                } else {
+                                    val error = finalInfo?.outputData
+                                        ?.getString("error")
+                                        ?: "Download did not finish. Check your connection and try again."
+
+                                    messages.add(
+                                        ChatMessage(
+                                            "Model download: $error",
+                                            false
+                                        )
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                messages.add(
+                                    ChatMessage(
+                                        "Could not start download: ${
+                                            e.message ?: "Unknown error"
+                                        }",
+                                        false
+                                    )
+                                )
+                            } finally {
+                                downloading = false
+                            }
+                        }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         when {
-                            modelReady -> "AI model ready"
+                            modelReady -> "AI model downloaded"
                             downloading -> "Downloading model…"
-                            downloadQueued -> "Download queued — Wi-Fi required"
-                            else -> "Download AI model (~2 GB)"
+                            else -> "Download AI model (about 2 GB)"
                         }
                     )
                 }
 
-                if (downloading || downloadQueued) {
+                if (downloading) {
                     LinearProgressIndicator(
                         progress = { downloadProgress / 100f },
                         modifier = Modifier
@@ -251,15 +228,11 @@ private fun PocketAiApp() {
 
                 Text(
                     text = when {
-                        modelReady -> "Model ready · Inference runs on-device"
                         downloading ->
-                            "Downloading in background: $downloadProgress%"
-                        downloadQueued -> "Waiting for an unmetered network (usually Wi-Fi)"
-                        downloadState == WorkInfo.State.FAILED ->
-                            "Download failed: " +
-                                (downloadInfo?.outputData?.getString("error")
-                                    ?: "Try again")
-                        else -> "Download once; chat offline afterward"
+                            "Downloading in the background: $downloadProgress%"
+                        busy -> "AI task running in the background…"
+                        modelReady -> "Model ready · Works offline"
+                        else -> "Internet required for the initial download"
                     },
                     color = Color(0xFFFFD27D),
                     fontSize = 12.sp,
@@ -272,7 +245,7 @@ private fun PocketAiApp() {
                         .fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(messages) { message ->
+                    itemsIndexed(messages) { _, message ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = if (message.fromUser) {
@@ -296,7 +269,7 @@ private fun PocketAiApp() {
                             ) {
                                 SelectionContainer {
                                     Text(
-                                        message.text,
+                                        text = message.text,
                                         color = Color(0xFFF0F0F4),
                                         fontSize = 15.sp
                                     )
@@ -324,14 +297,14 @@ private fun PocketAiApp() {
                     ) {
                         if (input.isEmpty()) {
                             Text(
-                                "Write a task or question…",
+                                text = "Write a message…",
                                 color = Color(0xFF9296A2)
                             )
                         }
 
                         BasicTextField(
                             value = input,
-                            onValueChange = { input = it.take(4000) },
+                            onValueChange = { input = it },
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = TextStyle(
                                 color = Color.White,
@@ -342,40 +315,177 @@ private fun PocketAiApp() {
                     }
 
                     Button(
-                        enabled = input.isNotBlank() && modelReady,
+                        enabled = input.isNotBlank() &&
+                            modelReady &&
+                            !busy &&
+                            !downloading,
                         onClick = {
                             val prompt = input.trim()
                             if (prompt.isEmpty()) return@Button
 
-                            val request =
-                                OneTimeWorkRequestBuilder<AiTaskWorker>()
-                                    .setInputData(
-                                        workDataOf(
-                                            AiTaskWorker.KEY_PROMPT to prompt,
-                                            AiTaskWorker.KEY_MODEL_PATH to
-                                                modelFile.absolutePath
-                                        )
+                            if (!modelFile.exists()) {
+                                modelReady = false
+                                messages.add(
+                                    ChatMessage(
+                                        "The model file is missing. Download it again before chatting.",
+                                        false
                                     )
-                                    .addTag(AiTaskWorker.TAG)
-                                    .build()
-
-                            // Serial queue: avoid loading multiple large models
-                            // into RAM at the same time.
-                            workManager.beginUniqueWork(
-                                AI_QUEUE_NAME,
-                                ExistingWorkPolicy.APPEND_OR_REPLACE,
-                                request
-                            ).enqueue()
+                                )
+                                return@Button
+                            }
 
                             input = ""
                             keyboard?.hide()
                             focusManager.clearFocus()
+
+                            messages.add(ChatMessage(prompt, true))
+                            messages.add(
+                                ChatMessage(
+                                    "Queued. This task can continue if you leave the app.",
+                                    false
+                                )
+                            )
+
+                            val answerIndex = messages.lastIndex
+                            busy = true
+
+                            scope.launch {
+                                try {
+                                    val request =
+                                        OneTimeWorkRequestBuilder<AiTaskWorker>()
+                                            .setInputData(
+                                                workDataOf(
+                                                    AiTaskWorker.KEY_PROMPT to prompt,
+                                                    AiTaskWorker.KEY_MODEL_PATH to
+                                                        modelFile.absolutePath
+                                                )
+                                            )
+                                            .build()
+
+                                    workManager.enqueueUniqueWork(
+                                        "pocket-ai-ai-queue",
+                                        ExistingWorkPolicy.APPEND_OR_REPLACE,
+                                        request
+                                    )
+
+                                    monitorWork(
+                                        workManager = workManager,
+                                        workId = request.id,
+                                        onUpdate = { info ->
+                                            if (info == null) return@monitorWork
+
+                                            when (info.state) {
+                                                WorkInfo.State.ENQUEUED,
+                                                WorkInfo.State.BLOCKED -> {
+                                                    messages[answerIndex] =
+                                                        ChatMessage(
+                                                            "Task queued. Waiting to run…",
+                                                            false
+                                                        )
+                                                }
+
+                                                WorkInfo.State.RUNNING -> {
+                                                    messages[answerIndex] =
+                                                        ChatMessage(
+                                                            "AI is working. You can leave the app while it runs…",
+                                                            false
+                                                        )
+                                                }
+
+                                                else -> Unit
+                                            }
+                                        }
+                                    )
+
+                                    val result =
+                                        getWorkInfo(workManager, request.id)
+
+                                    messages[answerIndex] =
+                                        when (result?.state) {
+                                            WorkInfo.State.SUCCEEDED -> {
+                                                ChatMessage(
+                                                    result.outputData.getString(
+                                                        AiTaskWorker.KEY_ANSWER
+                                                    ) ?: "Task completed, but no answer was returned.",
+                                                    false
+                                                )
+                                            }
+
+                                            WorkInfo.State.FAILED -> {
+                                                ChatMessage(
+                                                    "AI task failed: " +
+                                                        (
+                                                            result.outputData.getString(
+                                                                AiTaskWorker.KEY_ERROR
+                                                            ) ?: "Unknown error"
+                                                        ),
+                                                    false
+                                                )
+                                            }
+
+                                            WorkInfo.State.CANCELLED -> {
+                                                ChatMessage(
+                                                    "AI task was cancelled.",
+                                                    false
+                                                )
+                                            }
+
+                                            else -> {
+                                                ChatMessage(
+                                                    "The task has been queued or stopped by Android. Reopen the app to check its status.",
+                                                    false
+                                                )
+                                            }
+                                        }
+                                } catch (e: Exception) {
+                                    messages[answerIndex] =
+                                        ChatMessage(
+                                            "Could not run AI task: ${
+                                                e.message ?: "Unknown error"
+                                            }",
+                                            false
+                                        )
+                                } finally {
+                                    busy = false
+                                }
+                            }
                         }
                     ) {
-                        Text("Queue")
+                        Text("Send")
                     }
                 }
             }
         }
+    }
+}
+
+private suspend fun getWorkInfo(
+    workManager: WorkManager,
+    workId: UUID
+): WorkInfo? {
+    return withContext(Dispatchers.IO) {
+        workManager.getWorkInfoById(workId).get()
+    }
+}
+
+private suspend fun monitorWork(
+    workManager: WorkManager,
+    workId: UUID,
+    onUpdate: (WorkInfo?) -> Unit
+) {
+    while (true) {
+        val info = getWorkInfo(workManager, workId)
+        onUpdate(info)
+
+        if (
+            info == null ||
+            info.state == WorkInfo.State.SUCCEEDED ||
+            info.state == WorkInfo.State.FAILED ||
+            info.state == WorkInfo.State.CANCELLED
+        ) {
+            return
+        }
+
+        delay(1000)
     }
 }
