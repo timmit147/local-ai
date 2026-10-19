@@ -1,9 +1,10 @@
-
 package com.example.pocketai
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,12 +17,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalFocusManager
+import dev.ffmpegkit.llama.Llama
+import dev.ffmpegkit.llama.LlamaConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 private data class ChatMessage(
     val text: String,
@@ -32,29 +40,81 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Resize the app when the keyboard opens.
         window.setSoftInputMode(
             android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
 
-        setContent { PocketAiApp() }
+        setContent {
+            PocketAiApp()
+        }
     }
 }
 
 @Composable
 private fun PocketAiApp() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
     val messages = remember {
         mutableStateListOf(
             ChatMessage(
-                "Welcome to Pocket AI! Your chat is ready. Next, load a local AI model to generate real answers.",
+                "Welcome to Pocket AI. Select a GGUF model file to get started.",
                 false
             )
         )
     }
 
     var input by remember { mutableStateOf("") }
-    val keyboard = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
+    var modelPath by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    val modelPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                busy = true
+                try {
+                    val destination = withContext(Dispatchers.IO) {
+                        val directory = File(
+                            context.getExternalFilesDir("models"),
+                            ""
+                        )
+                        directory.mkdirs()
+
+                        val file = File(directory, "model.gguf")
+
+                        context.contentResolver.openInputStream(uri).use { stream ->
+                            requireNotNull(stream) {
+                                "Could not open the selected file."
+                            }.copyTo(file.outputStream())
+                        }
+
+                        file.absolutePath
+                    }
+
+                    modelPath = destination
+                    messages.add(
+                        ChatMessage(
+                            "Model file selected successfully. Send a message to start local inference.",
+                            false
+                        )
+                    )
+                } catch (e: Exception) {
+                    messages.add(
+                        ChatMessage(
+                            "Could not copy the model: ${e.message}",
+                            false
+                        )
+                    )
+                } finally {
+                    busy = false
+                }
+            }
+        }
+    }
 
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -74,40 +134,47 @@ private fun PocketAiApp() {
                     .fillMaxSize()
                     .statusBarsPadding()
                     .padding(horizontal = 16.dp)
-                    .padding(top = 8.dp, bottom = 8.dp)
+                    .padding(vertical = 8.dp)
             ) {
                 Text(
-                    text = "Pocket AI",
+                    "Pocket AI",
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
 
                 Text(
-                    text = "Your private, on-device assistant",
+                    "Private AI running on your phone",
                     color = Color(0xFFB7BAC4),
-                    modifier = Modifier.padding(
-                        top = 4.dp,
-                        bottom = 12.dp
-                    )
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
 
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF252831)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp)
+                Button(
+                    enabled = !busy,
+                    onClick = {
+                        modelPicker.launch(arrayOf("*/*"))
+                    },
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "LOCAL MODEL NOT CONNECTED YET",
-                        color = Color(0xFFFFD27D),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(12.dp)
+                        if (modelPath == null) {
+                            "Choose GGUF model file"
+                        } else {
+                            "Choose a different model"
+                        }
                     )
                 }
+
+                Text(
+                    text = when {
+                        busy -> "Working…"
+                        modelPath != null -> "Model file ready"
+                        else -> "Select a downloaded .gguf model first"
+                    },
+                    color = Color(0xFFFFD27D),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
 
                 LazyColumn(
                     modifier = Modifier
@@ -118,25 +185,28 @@ private fun PocketAiApp() {
                     items(messages) { message ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement =
-                                if (message.fromUser) Arrangement.End
-                                else Arrangement.Start
+                            horizontalArrangement = if (message.fromUser) {
+                                Arrangement.End
+                            } else {
+                                Arrangement.Start
+                            }
                         ) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth(0.88f)
                                     .background(
-                                        color = if (message.fromUser)
+                                        if (message.fromUser) {
                                             Color(0xFF35466D)
-                                        else Color(0xFF252831),
-                                        shape = RoundedCornerShape(16.dp)
+                                        } else {
+                                            Color(0xFF252831)
+                                        },
+                                        RoundedCornerShape(16.dp)
                                     )
                                     .padding(12.dp)
                             ) {
-                                // Long-press to select and copy text.
                                 SelectionContainer {
                                     Text(
-                                        text = message.text,
+                                        message.text,
                                         color = Color(0xFFF0F0F4),
                                         fontSize = 15.sp
                                     )
@@ -182,24 +252,59 @@ private fun PocketAiApp() {
                     }
 
                     Button(
-                        enabled = input.isNotBlank(),
+                        enabled = input.isNotBlank() &&
+                            modelPath != null && !busy,
                         onClick = {
-                            val message = input.trim()
-                            if (message.isNotEmpty()) {
-                                messages.add(ChatMessage(message, true))
+                            val prompt = input.trim()
+                            val path = modelPath ?: return@Button
 
-                                // Temporary placeholder until the local
-                                // inference engine is integrated.
-                                messages.add(
-                                    ChatMessage(
-                                        "Local AI is not connected yet. The next step is adding the on-device model engine.",
-                                        false
+                            messages.add(ChatMessage(prompt, true))
+                            input = ""
+                            keyboard?.hide()
+                            focusManager.clearFocus()
+
+                            scope.launch {
+                                busy = true
+                                try {
+                                    messages.add(
+                                        ChatMessage("Generating locally…", false)
                                     )
-                                )
 
-                                input = ""
-                                keyboard?.hide()
-                                focusManager.clearFocus()
+                                    val answer = withContext(Dispatchers.IO) {
+                                        val model = Llama.loadModel(
+                                            modelPath = path,
+                                            config = LlamaConfig(
+                                                contextSize = 2048,
+                                                threads = 4
+                                            )
+                                        )
+
+                                        try {
+                                            Llama.complete(
+                                                model,
+                                                prompt = prompt,
+                                                systemPrompt =
+                                                    "You are Pocket AI, a helpful assistant. Answer clearly and concisely.",
+                                                maxTokens = 256
+                                            ).text
+                                        } finally {
+                                            Llama.releaseModel(model)
+                                        }
+                                    }
+
+                                    messages.removeAt(messages.lastIndex)
+                                    messages.add(ChatMessage(answer, false))
+                                } catch (e: Exception) {
+                                    messages.removeAt(messages.lastIndex)
+                                    messages.add(
+                                        ChatMessage(
+                                            "AI error: ${e.message ?: "Unknown error"}",
+                                            false
+                                        )
+                                    )
+                                } finally {
+                                    busy = false
+                                }
                             }
                         }
                     ) {
