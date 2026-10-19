@@ -1,8 +1,8 @@
-name: Build Pocket AI Signed APK
+name: Build APK
 
-on:
+'on':
   push:
-    branches: [main]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -27,63 +27,18 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Set release version
+      - name: Download native llama.cpp libraries and headers
         run: |
-          VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
-          sed -i "s/versionCode = [0-9]*/versionCode = ${VERSION_CODE}/" app/build.gradle.kts
+          git clone --depth 1 https://github.com/xentron-bit/llama-android-prebuilt.git /tmp/llama-prebuilt
+          mkdir -p app/src/main/cpp/prebuilt
+          cp -r /tmp/llama-prebuilt/include app/src/main/cpp/prebuilt/
+          cp -r /tmp/llama-prebuilt/jniLibs app/src/main/cpp/prebuilt/
 
-      - name: Restore signing key
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          set -euo pipefail
-          test -n "$KEYSTORE_BASE64"
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pocket-ai.jks"
-          test -s "$RUNNER_TEMP/pocket-ai.jks"
+      - name: Build APK
+        run: gradle assembleDebug
 
-      - name: Build release APK
-        run: gradle assembleRelease
-
-      - name: Sign APK
-        env:
-          KEY_ALIAS: pocketai
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          test -n "$KEYSTORE_PASSWORD"
-          test -n "$KEY_PASSWORD"
-
-          APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
-
-          test -f "$APK"
-          test -n "$APKSIGNER"
-
-          "$APKSIGNER" sign \
-            --ks "$RUNNER_TEMP/pocket-ai.jks" \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:KEYSTORE_PASSWORD \
-            --key-pass env:KEY_PASSWORD \
-            --out "$RUNNER_TEMP/pocket-ai.apk" \
-            "$APK"
-
-          "$APKSIGNER" verify --verbose "$RUNNER_TEMP/pocket-ai.apk"
-
-      - name: Create checksum
-        run: |
-          cd "$RUNNER_TEMP"
-          sha256sum pocket-ai.apk > pocket-ai.apk.sha256
-
-      - name: Upload signed APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pocket-ai-release
-          path: |
-            ${{ runner.temp }}/pocket-ai.apk
-            ${{ runner.temp }}/pocket-ai.apk.sha256
-          if-no-files-found: error
-
-      - name: Remove temporary signing key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/pocket-ai.jks"
+          name: pocket-ai-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
