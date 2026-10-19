@@ -10,14 +10,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 
 private data class ChatMessage(
     val text: String,
@@ -27,9 +31,13 @@ private data class ChatMessage(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            PocketAiApp()
-        }
+
+        // Resize the app when the keyboard opens.
+        window.setSoftInputMode(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+
+        setContent { PocketAiApp() }
     }
 }
 
@@ -38,13 +46,15 @@ private fun PocketAiApp() {
     val messages = remember {
         mutableStateListOf(
             ChatMessage(
-                "Welcome to Pocket AI! Your own AI app is starting here. The next step is connecting a real local AI model.",
+                "Welcome to Pocket AI! Your chat is ready. Next, load a local AI model to generate real answers.",
                 false
             )
         )
     }
 
     var input by remember { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -53,13 +63,18 @@ private fun PocketAiApp() {
         )
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding()
+                .navigationBarsPadding(),
             color = Color(0xFF101114)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 8.dp, bottom = 8.dp)
             ) {
                 Text(
                     text = "Pocket AI",
@@ -73,7 +88,7 @@ private fun PocketAiApp() {
                     color = Color(0xFFB7BAC4),
                     modifier = Modifier.padding(
                         top = 4.dp,
-                        bottom = 16.dp
+                        bottom = 12.dp
                     )
                 )
 
@@ -86,7 +101,7 @@ private fun PocketAiApp() {
                         .padding(bottom = 12.dp)
                 ) {
                     Text(
-                        text = "LOCAL AI MODEL: NOT CONNECTED",
+                        text = "LOCAL MODEL NOT CONNECTED YET",
                         color = Color(0xFFFFD27D),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -118,11 +133,14 @@ private fun PocketAiApp() {
                                     )
                                     .padding(12.dp)
                             ) {
-                                Text(
-                                    text = message.text,
-                                    color = Color(0xFFF0F0F4),
-                                    fontSize = 15.sp
-                                )
+                                // Long-press to select and copy text.
+                                SelectionContainer {
+                                    Text(
+                                        text = message.text,
+                                        color = Color(0xFFF0F0F4),
+                                        fontSize = 15.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -155,7 +173,7 @@ private fun PocketAiApp() {
                             value = input,
                             onValueChange = { input = it },
                             modifier = Modifier.fillMaxWidth(),
-                            textStyle = androidx.compose.ui.text.TextStyle(
+                            textStyle = TextStyle(
                                 color = Color.White,
                                 fontSize = 16.sp
                             ),
@@ -167,18 +185,21 @@ private fun PocketAiApp() {
                         enabled = input.isNotBlank(),
                         onClick = {
                             val message = input.trim()
-
                             if (message.isNotEmpty()) {
-                                messages.add(
-                                    ChatMessage(message, true)
-                                )
+                                messages.add(ChatMessage(message, true))
+
+                                // Temporary placeholder until the local
+                                // inference engine is integrated.
                                 messages.add(
                                     ChatMessage(
-                                        "Your chat interface works! A real local AI model will be connected next.",
+                                        "Local AI is not connected yet. The next step is adding the on-device model engine.",
                                         false
                                     )
                                 )
+
                                 input = ""
+                                keyboard?.hide()
+                                focusManager.clearFocus()
                             }
                         }
                     ) {
