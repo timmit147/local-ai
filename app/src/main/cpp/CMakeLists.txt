@@ -8,7 +8,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt")
 set(JNI_LIBS "${PREBUILT_DIR}/jniLibs/${ANDROID_ABI}")
 
+if(NOT EXISTS "${PREBUILT_DIR}/include/llama.h")
+    message(FATAL_ERROR "Missing llama headers. Check the workflow download step.")
+endif()
+
 foreach(lib ggml-base ggml-cpu ggml-opencl ggml-vulkan ggml llama llama-common mtmd)
+    if(NOT EXISTS "${JNI_LIBS}/lib${lib}.so")
+        message(FATAL_ERROR "Missing native library: ${JNI_LIBS}/lib${lib}.so")
+    endif()
+
     add_library(${lib} SHARED IMPORTED)
     set_target_properties(${lib} PROPERTIES
         IMPORTED_LOCATION "${JNI_LIBS}/lib${lib}.so"
@@ -24,7 +32,15 @@ target_include_directories(pocketai_vision PRIVATE
 )
 
 target_link_libraries(pocketai_vision
-    llama llama-common mtmd
-    ggml ggml-base ggml-cpu ggml-opencl ggml-vulkan
-    android log jnigraphics
+    llama
+    llama-common
+    mtmd
+    ggml
+    ggml-base
+    ggml-cpu
+    ggml-opencl
+    ggml-vulkan
+    android
+    log
+    jnigraphics
 )
