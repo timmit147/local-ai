@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.pocketai"
-        minSdk = 26
+        minSdk = 29
         targetSdk = 35
         versionCode = 2
         versionName = "0.2.0"
