@@ -19,6 +19,7 @@ class AiTaskWorker(
         const val TAG = "pocket-ai-ai-task"
 
         const val KEY_PROMPT = "prompt"
+        const val KEY_DISPLAY_PROMPT = "display_prompt"
         const val KEY_MODEL_PATH = "model_path"
         const val KEY_ANSWER = "answer"
         const val KEY_ERROR = "error"
@@ -30,31 +31,43 @@ class AiTaskWorker(
                 workDataOf(KEY_ERROR to "Missing prompt")
             )
 
+        val displayPrompt = inputData.getString(KEY_DISPLAY_PROMPT)
+            ?: prompt.take(2000)
+
         val modelPath = inputData.getString(KEY_MODEL_PATH)
             ?: return Result.failure(
-                workDataOf(KEY_ERROR to "Missing model path")
+                workDataOf(
+                    KEY_ERROR to "Missing model path",
+                    KEY_DISPLAY_PROMPT to displayPrompt
+                )
             )
 
         if (prompt.isBlank()) {
             return Result.failure(
-                workDataOf(KEY_ERROR to "Prompt is empty")
+                workDataOf(
+                    KEY_ERROR to "Prompt is empty",
+                    KEY_DISPLAY_PROMPT to displayPrompt
+                )
             )
         }
 
         if (!File(modelPath).isFile) {
             return Result.failure(
-                workDataOf(KEY_ERROR to "AI model file not found")
+                workDataOf(
+                    KEY_ERROR to "AI model file not found",
+                    KEY_DISPLAY_PROMPT to displayPrompt
+                )
             )
         }
 
-        var model: Any? = null
+        setProgress(
+            workDataOf(KEY_DISPLAY_PROMPT to displayPrompt)
+        )
 
         try {
-            setForeground(
-                foreground("Starting your AI task…")
-            )
+            setForeground(foreground("Starting your AI task…"))
 
-            val loadedModel = Llama.loadModel(
+            val model = Llama.loadModel(
                 modelPath = modelPath,
                 config = LlamaConfig(
                     contextSize = 2048,
@@ -62,20 +75,26 @@ class AiTaskWorker(
                 )
             )
 
-            model = loadedModel
-
-            val answer = Llama.complete(
-                loadedModel,
-                prompt = prompt,
-                systemPrompt =
-                    "You are Pocket AI, a helpful private assistant. " +
-                    "Answer clearly and honestly.",
-                maxTokens = 256
-            ).text
+            val answer = try {
+                Llama.complete(
+                    model,
+                    prompt = prompt,
+                    systemPrompt =
+                        "You are Pocket AI, a helpful private assistant. " +
+                        "Answer clearly and honestly. " +
+                        "When given image labels or extracted file text, " +
+                        "use that information and don't claim to see " +
+                        "details that were not provided.",
+                    maxTokens = 256
+                ).text
+            } finally {
+                Llama.releaseModel(model)
+            }
 
             return Result.success(
                 workDataOf(
-                    KEY_ANSWER to answer.take(6000)
+                    KEY_ANSWER to answer.take(6000),
+                    KEY_DISPLAY_PROMPT to displayPrompt
                 )
             )
         } catch (e: CancellationException) {
@@ -85,14 +104,10 @@ class AiTaskWorker(
                 workDataOf(
                     KEY_ERROR to (
                         e.message ?: "AI generation failed"
-                    ).take(1000)
+                    ).take(1000),
+                    KEY_DISPLAY_PROMPT to displayPrompt
                 )
             )
-        } finally {
-            // The model is released below using the typed model
-            // reference maintained by the inference library.
-            // See the typed implementation immediately below.
-            releaseLoadedModel(model)
         }
     }
 
@@ -105,16 +120,5 @@ class AiTaskWorker(
             "Pocket AI is working",
             message
         )
-    }
-
-    private suspend fun releaseLoadedModel(
-        model: Any?
-    ) {
-        if (model != null) {
-            @Suppress("UNCHECKED_CAST")
-            Llama.releaseModel(
-                model as dev.ffmpegkit.llama.LlamaModel
-            )
-        }
     }
 }
