@@ -1,5 +1,7 @@
+
 #include <jni.h>
 #include <android/log.h>
+#include <string>
 
 #define LOG_TAG "PocketAIVision"
 
@@ -9,6 +11,6 @@ Java_com_example_pocketai_VisionEngine_nativeStatus(
         JNIEnv* env,
         jobject /* thiz */) {
     return env->NewStringUTF(
-        "Vision engine bridge loaded; model integration pending."
+        "Vision native bridge loaded. Image inference is not connected yet."
     );
 }
