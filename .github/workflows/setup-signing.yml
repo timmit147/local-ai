@@ -1,0 +1,20 @@
+
+name: Set up Pocket AI signing key
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check whether a key already exists
+        run: |
+          echo "This workflow does not create or publish signing keys."
+          echo "Create your keystore securely, then save it in GitHub Actions Secrets."
+          echo "See the Android signing guide:"
+          echo "https://developer.android.com/studio/publish/app-signing"
