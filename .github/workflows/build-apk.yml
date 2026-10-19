@@ -2,7 +2,8 @@ name: Build APK
 
 on:
 push:
-branches: [main]
+branches:
+- main
 workflow_dispatch:
 
 jobs:
@@ -24,19 +25,17 @@ steps:
   - name: Set up Android SDK
     uses: android-actions/setup-android@v3
 
-  - name: Install Android NDK
-    run: |
-      sdkmanager "platforms;android-35" "ndk;27.2.12479018"
+  - name: Install Android SDK and NDK
+    run: sdkmanager "platforms;android-35" "ndk;27.2.12479018"
 
   - name: Build debug APK
     run: |
-      chmod +x gradlew || true
-      if [ -f gradlew ]; then
-        ./gradlew assembleDebug
-      else
-        echo "Gradle wrapper is missing"
+      if [ ! -f gradlew ]; then
+        echo "ERROR: gradlew is missing from the repository"
         exit 1
       fi
+      chmod +x gradlew
+      ./gradlew assembleDebug
 
   - name: Upload APK
     uses: actions/upload-artifact@v4
