@@ -27,17 +27,22 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Download native llama.cpp libraries and headers
+      - name: Download native libraries
         run: |
           git clone --depth 1 https://github.com/xentron-bit/llama-android-prebuilt.git /tmp/llama-prebuilt
           mkdir -p app/src/main/cpp/prebuilt
           cp -r /tmp/llama-prebuilt/include app/src/main/cpp/prebuilt/
           cp -r /tmp/llama-prebuilt/jniLibs app/src/main/cpp/prebuilt/
+          echo "=== Downloaded headers ==="
+          ls -la app/src/main/cpp/prebuilt/include
+          echo "=== Downloaded libraries ==="
+          ls -la app/src/main/cpp/prebuilt/jniLibs/arm64-v8a
 
       - name: Build APK
-        run: gradle assembleDebug
+        run: gradle assembleDebug --stacktrace --info
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: pocket-ai-debug-apk
