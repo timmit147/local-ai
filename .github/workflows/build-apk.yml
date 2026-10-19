@@ -1,4 +1,4 @@
-name: Build Pocket AI Release
+name: Build Pocket AI Signed APK
 
 on:
   push:
@@ -29,36 +29,33 @@ jobs:
 
       - name: Set release version
         run: |
-          VERSION_CODE=$((1000 + $GITHUB_RUN_NUMBER))
+          VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
           sed -i "s/versionCode = [0-9]*/versionCode = ${VERSION_CODE}/" app/build.gradle.kts
-
-      - name: Build release APK
-        run: gradle assembleRelease
 
       - name: Restore signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          test -n "$KEYSTORE_BASE64" || {
-            echo "Missing ANDROID_KEYSTORE_BASE64 secret"
-            exit 1
-          }
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pocket-ai.jks"
           test -s "$RUNNER_TEMP/pocket-ai.jks"
 
+      - name: Build release APK
+        run: gradle assembleRelease
+
       - name: Sign APK
         env:
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_ALIAS: pocketai
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$KEY_ALIAS"
+          set -euo pipefail
           test -n "$KEYSTORE_PASSWORD"
           test -n "$KEY_PASSWORD"
 
           APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          SDK="${ANDROID_HOME}/build-tools"
-          APKSIGNER=$(find "$SDK" -name apksigner -type f | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
 
           test -f "$APK"
           test -n "$APKSIGNER"
