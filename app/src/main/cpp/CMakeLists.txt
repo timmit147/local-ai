@@ -1,3 +1,4 @@
+
 cmake_minimum_required(VERSION 3.22)
 project(pocketai_vision LANGUAGES CXX)
 
@@ -23,15 +24,7 @@ target_include_directories(pocketai_vision PRIVATE
 )
 
 target_link_libraries(pocketai_vision
-    llama
-    llama-common
-    mtmd
-    ggml
-    ggml-base
-    ggml-cpu
-    ggml-opencl
-    ggml-vulkan
-    android
-    log
-    jnigraphics
+    llama llama-common mtmd
+    ggml ggml-base ggml-cpu ggml-opencl ggml-vulkan
+    android log jnigraphics
 )
