@@ -3,8 +3,6 @@ package com.example.pocketai
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,19 +15,25 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import dev.ffmpegkit.llama.Llama
 import dev.ffmpegkit.llama.LlamaConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+
+private const val MODEL_URL =
+    "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf?download=true"
 
 private data class ChatMessage(
     val text: String,
@@ -50,6 +54,81 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private suspend fun downloadModel(
+    destination: File,
+    onProgress: (Int) -> Unit
+): File = withContext(Dispatchers.IO) {
+    destination.parentFile?.mkdirs()
+
+    val temporaryFile = File(destination.parentFile, "model.gguf.part")
+    val connection = URL(MODEL_URL).openConnection() as HttpURLConnection
+
+    try {
+        connection.connectTimeout = 20000
+        connection.readTimeout = 60000
+        connection.instanceFollowRedirects = true
+        connection.connect()
+
+        if (connection.responseCode !in 200..299) {
+            throw IOException("Download failed: HTTP ${connection.responseCode}")
+        }
+
+        val totalBytes = connection.contentLengthLong
+        var downloadedBytes = 0L
+        var lastProgress = -1
+
+        connection.inputStream.use { input ->
+            temporaryFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(1024 * 1024)
+
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+
+                    output.write(buffer, 0, count)
+                    downloadedBytes += count
+
+                    if (totalBytes > 0) {
+                        val percent =
+                            ((downloadedBytes * 100) / totalBytes)
+                                .toInt().coerceIn(0, 100)
+
+                        if (percent != lastProgress) {
+                            lastProgress = percent
+                            withContext(Dispatchers.Main) {
+                                onProgress(percent)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (totalBytes > 0 && temporaryFile.length() != totalBytes) {
+            throw IOException("Download incomplete. Please try again.")
+        }
+
+        if (temporaryFile.length() < 100_000_000L) {
+            throw IOException("Downloaded file is too small to be a model.")
+        }
+
+        if (destination.exists()) destination.delete()
+
+        if (!temporaryFile.renameTo(destination)) {
+            temporaryFile.copyTo(destination, overwrite = true)
+            temporaryFile.delete()
+        }
+
+        withContext(Dispatchers.Main) {
+            onProgress(100)
+        }
+
+        destination
+    } finally {
+        connection.disconnect()
+    }
+}
+
 @Composable
 private fun PocketAiApp() {
     val context = LocalContext.current
@@ -57,63 +136,33 @@ private fun PocketAiApp() {
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
 
-    val messages = remember {
-        mutableStateListOf(
-            ChatMessage(
-                "Welcome to Pocket AI. Select a GGUF model file to get started.",
-                false
-            )
+    val modelFile = remember(context) {
+        File(
+            context.getExternalFilesDir(null) ?: context.filesDir,
+            "models/model.gguf"
+        )
+    }
+
+    var modelPath by remember {
+        mutableStateOf(
+            if (modelFile.exists() &&
+                modelFile.length() > 100_000_000L
+            ) modelFile.absolutePath else null
         )
     }
 
     var input by remember { mutableStateOf("") }
-    var modelPath by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var downloading by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableIntStateOf(0) }
 
-    val modelPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                busy = true
-                try {
-                    val destination = withContext(Dispatchers.IO) {
-                        val directory = File(
-                            context.getExternalFilesDir("models"),
-                            ""
-                        )
-                        directory.mkdirs()
-
-                        val file = File(directory, "model.gguf")
-
-                        context.contentResolver.openInputStream(uri).use { stream ->
-                            requireNotNull(stream) {
-                                "Could not open the selected file."
-                            }.copyTo(file.outputStream())
-                        }
-
-                        file.absolutePath
-                    }
-
-                    modelPath = destination
-                    messages.add(
-                        ChatMessage(
-                            "Model file selected successfully. Send a message to start local inference.",
-                            false
-                        )
-                    )
-                } catch (e: Exception) {
-                    messages.add(
-                        ChatMessage(
-                            "Could not copy the model: ${e.message}",
-                            false
-                        )
-                    )
-                } finally {
-                    busy = false
-                }
-            }
-        }
+    val messages = remember {
+        mutableStateListOf(
+            ChatMessage(
+                "Welcome to Pocket AI! Download the AI model to start chatting offline.",
+                false
+            )
+        )
     }
 
     MaterialTheme(
@@ -133,8 +182,7 @@ private fun PocketAiApp() {
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
-                    .padding(horizontal = 16.dp)
-                    .padding(vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
                     "Pocket AI",
@@ -144,32 +192,69 @@ private fun PocketAiApp() {
                 )
 
                 Text(
-                    "Private AI running on your phone",
+                    "Your private, on-device assistant",
                     color = Color(0xFFB7BAC4),
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
 
                 Button(
-                    enabled = !busy,
+                    enabled = !downloading && !busy && modelPath == null,
                     onClick = {
-                        modelPicker.launch(arrayOf("*/*"))
+                        scope.launch {
+                            downloading = true
+                            downloadProgress = 0
+
+                            try {
+                                val downloaded = downloadModel(modelFile) {
+                                    downloadProgress = it
+                                }
+
+                                modelPath = downloaded.absolutePath
+                                messages.add(
+                                    ChatMessage(
+                                        "AI model downloaded! You can now chat offline.",
+                                        false
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                messages.add(
+                                    ChatMessage(
+                                        "Download failed: ${e.message ?: "Unknown error"}. Check your internet connection and try again.",
+                                        false
+                                    )
+                                )
+                                modelFile.delete()
+                            } finally {
+                                downloading = false
+                            }
+                        }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        if (modelPath == null) {
-                            "Choose GGUF model file"
-                        } else {
-                            "Choose a different model"
+                        when {
+                            modelPath != null -> "AI model downloaded"
+                            downloading -> "Downloading model…"
+                            else -> "Download AI model (about 1.93 GB)"
                         }
+                    )
+                }
+
+                if (downloading) {
+                    LinearProgressIndicator(
+                        progress = downloadProgress / 100f,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
                     )
                 }
 
                 Text(
                     text = when {
-                        busy -> "Working…"
-                        modelPath != null -> "Model file ready"
-                        else -> "Select a downloaded .gguf model first"
+                        downloading -> "Downloading: $downloadProgress%"
+                        busy -> "AI is thinking…"
+                        modelPath != null -> "Model ready · Works offline"
+                        else -> "Download over Wi-Fi recommended"
                     },
                     color = Color(0xFFFFD27D),
                     fontSize = 12.sp,
@@ -253,24 +338,24 @@ private fun PocketAiApp() {
 
                     Button(
                         enabled = input.isNotBlank() &&
-                            modelPath != null && !busy,
+                            modelPath != null && !busy && !downloading,
                         onClick = {
                             val prompt = input.trim()
                             val path = modelPath ?: return@Button
 
                             messages.add(ChatMessage(prompt, true))
+                            messages.add(ChatMessage("Thinking…", false))
+                            val thinkingIndex = messages.lastIndex
+
                             input = ""
                             keyboard?.hide()
                             focusManager.clearFocus()
 
                             scope.launch {
                                 busy = true
-                                try {
-                                    messages.add(
-                                        ChatMessage("Generating locally…", false)
-                                    )
 
-                                    val answer = withContext(Dispatchers.IO) {
+                                try {
+                                    val answer = withContext(Dispatchers.Default) {
                                         val model = Llama.loadModel(
                                             modelPath = path,
                                             config = LlamaConfig(
@@ -283,8 +368,7 @@ private fun PocketAiApp() {
                                             Llama.complete(
                                                 model,
                                                 prompt = prompt,
-                                                systemPrompt =
-                                                    "You are Pocket AI, a helpful assistant. Answer clearly and concisely.",
+                                                systemPrompt = "You are Pocket AI, a helpful assistant. Give clear and useful answers.",
                                                 maxTokens = 256
                                             ).text
                                         } finally {
@@ -292,15 +376,12 @@ private fun PocketAiApp() {
                                         }
                                     }
 
-                                    messages.removeAt(messages.lastIndex)
-                                    messages.add(ChatMessage(answer, false))
+                                    messages[thinkingIndex] =
+                                        ChatMessage(answer, false)
                                 } catch (e: Exception) {
-                                    messages.removeAt(messages.lastIndex)
-                                    messages.add(
-                                        ChatMessage(
-                                            "AI error: ${e.message ?: "Unknown error"}",
-                                            false
-                                        )
+                                    messages[thinkingIndex] = ChatMessage(
+                                        "AI error: ${e.message ?: "Could not generate a response."}",
+                                        false
                                     )
                                 } finally {
                                     busy = false
