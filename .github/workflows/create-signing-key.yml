@@ -10,17 +10,15 @@ jobs:
   create-key:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate signing key
+      - name: Generate and export signing key
         env:
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          set -e
+          set -euo pipefail
 
-          if [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "Add the two password secrets before running this workflow."
-            exit 1
-          fi
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
 
           keytool -genkeypair \
             -keystore "$RUNNER_TEMP/pocket-ai.jks" \
@@ -32,4 +30,5 @@ jobs:
             -validity 10000 \
             -dname "CN=Pocket AI"
 
-          echo "Key generated successfully, but it still needs to be stored securely."
+          echo "Keystore created. It must now be stored in GitHub Secrets."
+          echo "No private key will be published as a build artifact."
