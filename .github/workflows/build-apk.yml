@@ -28,12 +28,10 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Accept Android licenses
+      - name: Install Android tools
+        shell: bash
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-
-      - name: Install Android tools
-        run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
             "platforms;android-35" \
@@ -42,71 +40,46 @@ jobs:
             "ndk;27.0.12077973"
 
       - name: Download native libraries
+        shell: bash
         run: |
           set -euxo pipefail
           git clone --depth 1 https://github.com/xentron-bit/llama-android-prebuilt.git /tmp/llama-prebuilt
           mkdir -p app/src/main/cpp/prebuilt
           cp -r /tmp/llama-prebuilt/include app/src/main/cpp/prebuilt/
           cp -r /tmp/llama-prebuilt/jniLibs app/src/main/cpp/prebuilt/
-          find app/src/main/cpp/prebuilt -type f | sort
+          echo "===== Native libraries downloaded ====="
+          find app/src/main/cpp/prebuilt/jniLibs -type f -name '*.so' -print
 
-      - name: Build APK with full diagnostics
+      - name: Build APK and show errors
         id: build
         continue-on-error: true
         shell: bash
         run: |
-          mkdir -p build-diagnostics
-          java -version 2>&1 | tee build-diagnostics/environment.txt
-          gradle --version 2>&1 | tee -a build-diagnostics/environment.txt
-
           set +e
           set -o pipefail
+
           gradle assembleDebug \
             --stacktrace \
             --info \
             --warning-mode all \
             --console=plain \
-            --no-daemon \
-            2>&1 | tee build-diagnostics/full-build.log
+            --no-daemon 2>&1 | tee build.log
+
           RESULT=${PIPESTATUS[0]}
-          set -e
 
-          echo "$RESULT" > build-diagnostics/exit-code.txt
+          if [ "$RESULT" -ne 0 ]; then
+            echo ""
+            echo "========== BUILD ERROR DETAILS =========="
+            grep -n -B 12 -A 30 -E \
+              'CMake Error|fatal error:|error:|^e: |What went wrong|Execution failed for task|Cannot find|already exists|not found' \
+              build.log | head -n 300 || true
+            echo ""
+            echo "========== END ERROR DETAILS =========="
+          else
+            echo "BUILD SUCCESSFUL"
+          fi
 
-          grep -n -i -E \
-            '(^e: |error:|fatal error:|unresolved reference|type mismatch|expecting |Execution failed for task|Task .* FAILED|CMake Error|ninja: error|What went wrong|Caused by:|BUILD FAILED)' \
-            build-diagnostics/full-build.log \
-            > build-diagnostics/errors-summary.txt || true
-
-          echo "Build exit code: $RESULT"
-          echo "===== ERROR SUMMARY ====="
-          cat build-diagnostics/errors-summary.txt || true
           exit "$RESULT"
-
-      - name: Save source files for diagnosis
-        if: always()
-        run: |
-          mkdir -p build-diagnostics/source-info
-          for file in \
-            app/build.gradle.kts \
-            app/src/main/cpp/CMakeLists.txt \
-            app/src/main/cpp/vision_bridge.cpp \
-            app/src/main/java/com/example/pocketai/VisionEngine.kt \
-            .github/workflows/build-apk.yml
-          do
-            if [ -f "$file" ]; then
-              cp --parents "$file" build-diagnostics/source-info/
-            fi
-          done
-
-      - name: Upload diagnostic logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pocket-ai-build-diagnostics
-          path: build-diagnostics/
-          if-no-files-found: warn
-          retention-days: 14
 
       - name: Upload APK
         if: steps.build.outcome == 'success'
@@ -114,9 +87,11 @@ jobs:
         with:
           name: pocket-ai-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
 
       - name: Mark failed build
         if: steps.build.outcome != 'success'
+        shell: bash
         run: |
-          echo "Build failed. Download pocket-ai-build-diagnostics from the Artifacts section."
+          echo "BUILD FAILED. Read the BUILD ERROR DETAILS above."
           exit 1
