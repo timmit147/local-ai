@@ -1,4 +1,3 @@
-
 cmake_minimum_required(VERSION 3.22)
 project(pocketai_vision LANGUAGES CXX)
 
@@ -9,7 +8,7 @@ set(PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt")
 set(JNI_LIBS "${PREBUILT_DIR}/jniLibs/${ANDROID_ABI}")
 
 if(NOT EXISTS "${PREBUILT_DIR}/include/llama.h")
-    message(FATAL_ERROR "Missing llama headers. Check the workflow download step.")
+    message(FATAL_ERROR "Missing llama headers.")
 endif()
 
 foreach(lib ggml-base ggml-cpu ggml-opencl ggml-vulkan ggml llama llama-common mtmd)
