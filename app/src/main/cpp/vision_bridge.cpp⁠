@@ -1,16 +1,26 @@
-
 #include <jni.h>
-#include <android/log.h>
 #include <string>
-
-#define LOG_TAG "PocketAIVision"
 
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_example_pocketai_VisionEngine_nativeStatus(
         JNIEnv* env,
-        jobject /* thiz */) {
+        jobject) {
+    return env->NewStringUTF("Vision engine ready");
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_pocketai_VisionEngine_describeImage(
+        JNIEnv* env,
+        jobject,
+        jstring modelPath,
+        jstring mmprojPath,
+        jstring imagePath,
+        jstring prompt) {
+
     return env->NewStringUTF(
-        "Vision native bridge loaded. Image inference is not connected yet."
+        "Image recognition is not implemented yet. "
+        "The native model and image-processing pipeline must be connected."
     );
 }
