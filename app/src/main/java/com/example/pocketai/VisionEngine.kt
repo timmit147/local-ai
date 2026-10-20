@@ -1,7 +1,5 @@
 package com.example.pocketai
 
-import android.graphics.Bitmap
-
 object VisionEngine {
     init {
         System.loadLibrary("ggml-base")
