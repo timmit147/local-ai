@@ -1,4 +1,3 @@
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -55,6 +54,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+
+    // Required for background model downloads and notifications
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Existing local AI inference library
     implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
