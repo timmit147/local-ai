@@ -1,5 +1,7 @@
 package com.example.pocketai
 
+import android.graphics.Bitmap
+
 object VisionEngine {
     init {
         System.loadLibrary("ggml-base")
@@ -14,4 +16,11 @@ object VisionEngine {
     }
 
     external fun nativeStatus(): String
+
+    external fun describeImage(
+        modelPath: String,
+        mmprojPath: String,
+        imagePath: String,
+        prompt: String
+    ): String
 }
