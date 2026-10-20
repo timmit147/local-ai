@@ -2,16 +2,17 @@
 #include <string>
 #include <vector>
 #include <android/bitmap.h>
+#include <android/log.h>
 #include "llama.h"
 #include "mtmd.h"
+
+static std::string errorMessage;
 
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_example_pocketai_VisionEngine_nativeStatus(
         JNIEnv* env, jobject) {
-    return env->NewStringUTF(
-        "MTMD loaded. Ready to initialize vision model."
-    );
+    return env->NewStringUTF("MTMD API available");
 }
 
 extern "C"
@@ -24,47 +25,48 @@ Java_com_example_pocketai_VisionEngine_describeImage(
         jstring imagePath,
         jstring prompt) {
 
-    const char* model_file =
-        env->GetStringUTFChars(modelPath, nullptr);
-    const char* projector_file =
-        env->GetStringUTFChars(mmprojPath, nullptr);
-    const char* image_file =
-        env->GetStringUTFChars(imagePath, nullptr);
-    const char* question =
-        env->GetStringUTFChars(prompt, nullptr);
+    const char* modelFile = env->GetStringUTFChars(modelPath, nullptr);
+    const char* projectorFile = env->GetStringUTFChars(mmprojPath, nullptr);
+    const char* imageFile = env->GetStringUTFChars(imagePath, nullptr);
+    const char* question = env->GetStringUTFChars(prompt, nullptr);
 
     std::string result;
-
     llama_backend_init();
 
-    llama_model_params model_params =
-        llama_model_default_params();
+    llama_model_params modelParams = llama_model_default_params();
+    llama_model* model = llama_model_load_from_file(modelFile, modelParams);
 
-    llama_model* model = llama_model_load_from_file(
-        model_file, model_params
-    );
-
-    if (model == nullptr) {
-        result = "Could not load the vision language model.";
+    if (!model) {
+        result = "Failed to load vision language model.";
     } else {
-        mtmd_context_params vision_params =
-            mtmd_context_params_default();
+        llama_context_params contextParams = llama_context_default_params();
+        contextParams.n_ctx = 2048;
+        contextParams.n_batch = 1024;
 
-        vision_params.use_gpu = false;
-        vision_params.n_threads = 4;
+        llama_context* context = llama_init_from_model(model, contextParams);
 
-        mtmd_context* vision = mtmd_init_from_file(
-            projector_file, model, vision_params
-        );
-
-        if (vision == nullptr) {
-            result = "Could not load the mmproj file.";
+        if (!context) {
+            result = "Failed to create inference context.";
         } else {
-            result =
-                "Vision model and projector loaded, but image "
-                "tokenization and text generation still need "
-                "to be connected.";
-            mtmd_free(vision);
+            mtmd_context_params visionParams = mtmd_context_params_default();
+            visionParams.use_gpu = true;
+            visionParams.n_threads = 4;
+
+            mtmd_context* vision = mtmd_init_from_file(
+                projectorFile, model, visionParams
+            );
+
+            if (!vision) {
+                result = "Failed to load the matching mmproj file.";
+            } else {
+                result =
+                    "The model and projector loaded successfully, but "
+                    "image tokenization and decoding must be connected "
+                    "before inference can return an answer.";
+                mtmd_free(vision);
+            }
+
+            llama_free(context);
         }
 
         llama_model_free(model);
@@ -72,9 +74,9 @@ Java_com_example_pocketai_VisionEngine_describeImage(
 
     llama_backend_free();
 
-    env->ReleaseStringUTFChars(modelPath, model_file);
-    env->ReleaseStringUTFChars(mmprojPath, projector_file);
-    env->ReleaseStringUTFChars(imagePath, image_file);
+    env->ReleaseStringUTFChars(modelPath, modelFile);
+    env->ReleaseStringUTFChars(mmprojPath, projectorFile);
+    env->ReleaseStringUTFChars(imagePath, imageFile);
     env->ReleaseStringUTFChars(prompt, question);
 
     return env->NewStringUTF(result.c_str());
