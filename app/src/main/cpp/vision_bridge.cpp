@@ -1,19 +1,17 @@
 #include <jni.h>
 #include <string>
 #include <vector>
-#include <memory>
-#include <android/log.h>
+#include <android/bitmap.h>
 #include "llama.h"
 #include "mtmd.h"
-
-#define TAG "PocketAI"
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_example_pocketai_VisionEngine_nativeStatus(
         JNIEnv* env, jobject) {
-    return env->NewStringUTF("MTMD native vision engine loaded");
+    return env->NewStringUTF(
+        "MTMD loaded. Ready to initialize vision model."
+    );
 }
 
 extern "C"
@@ -26,21 +24,58 @@ Java_com_example_pocketai_VisionEngine_describeImage(
         jstring imagePath,
         jstring prompt) {
 
-    const char* model = env->GetStringUTFChars(modelPath, nullptr);
-    const char* projector = env->GetStringUTFChars(mmprojPath, nullptr);
-    const char* image = env->GetStringUTFChars(imagePath, nullptr);
-    const char* question = env->GetStringUTFChars(prompt, nullptr);
+    const char* model_file =
+        env->GetStringUTFChars(modelPath, nullptr);
+    const char* projector_file =
+        env->GetStringUTFChars(mmprojPath, nullptr);
+    const char* image_file =
+        env->GetStringUTFChars(imagePath, nullptr);
+    const char* question =
+        env->GetStringUTFChars(prompt, nullptr);
 
-    std::string result =
-        "MTMD inference is not connected. Model: " +
-        std::string(model ? model : "") +
-        ". The model and image-processing calls must be implemented "
-        "against the matching llama.cpp API.";
+    std::string result;
 
-    if (model) env->ReleaseStringUTFChars(modelPath, model);
-    if (projector) env->ReleaseStringUTFChars(mmprojPath, projector);
-    if (image) env->ReleaseStringUTFChars(imagePath, image);
-    if (question) env->ReleaseStringUTFChars(prompt, question);
+    llama_backend_init();
+
+    llama_model_params model_params =
+        llama_model_default_params();
+
+    llama_model* model = llama_model_load_from_file(
+        model_file, model_params
+    );
+
+    if (model == nullptr) {
+        result = "Could not load the vision language model.";
+    } else {
+        mtmd_context_params vision_params =
+            mtmd_context_params_default();
+
+        vision_params.use_gpu = false;
+        vision_params.n_threads = 4;
+
+        mtmd_context* vision = mtmd_init_from_file(
+            projector_file, model, vision_params
+        );
+
+        if (vision == nullptr) {
+            result = "Could not load the mmproj file.";
+        } else {
+            result =
+                "Vision model and projector loaded, but image "
+                "tokenization and text generation still need "
+                "to be connected.";
+            mtmd_free(vision);
+        }
+
+        llama_model_free(model);
+    }
+
+    llama_backend_free();
+
+    env->ReleaseStringUTFChars(modelPath, model_file);
+    env->ReleaseStringUTFChars(mmprojPath, projector_file);
+    env->ReleaseStringUTFChars(imagePath, image_file);
+    env->ReleaseStringUTFChars(prompt, question);
 
     return env->NewStringUTF(result.c_str());
 }
