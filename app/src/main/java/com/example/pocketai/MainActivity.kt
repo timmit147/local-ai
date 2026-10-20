@@ -746,7 +746,10 @@ private fun PocketAiApp() {
                         enabled = (
                             input.isNotBlank() ||
                                 pendingAttachment != null
-                            ) && modelReady && !busy && !downloading,
+                            ) && (
+                                modelReady ||
+                                    pendingAttachment?.isImage == true
+                                ) && !busy && !downloading,
                         onClick = {
                             val userText = input.trim()
                             val attachment = pendingAttachment
@@ -771,26 +774,20 @@ private fun PocketAiApp() {
                                 )
                             )
 
-                            if (attachment?.isImage == true) {
-                                messages.add(
-                                    ChatMessage(
-                                        "Your image is attached and saved in this chat. Image understanding is not enabled yet; the current model is text-only. We'll add a compatible vision model next.",
-                                        false
-                                    )
-                                )
-                                return@IconButton
+                            val isImage = attachment?.isImage == true
+
+                            val fileText = if (isImage) {
+                                null
+                            } else {
+                                attachment?.let { readTextAttachment(it) }
                             }
 
-                            val fileText = attachment?.let {
-                                readTextAttachment(it)
-                            }
-
-                            val prompt = buildString {
+                            val textPrompt = buildString {
                                 append(userText.ifBlank {
                                     "Please help me with the attached file."
                                 })
 
-                                if (attachment != null) {
+                                if (attachment != null && !isImage) {
                                     if (fileText != null) {
                                         append(
                                             "\n\nAttached file: ${attachment.name}\n"
@@ -805,7 +802,7 @@ private fun PocketAiApp() {
                                 }
                             }
 
-                            if (!modelFile.exists()) {
+                            if (!isImage && !modelFile.exists()) {
                                 modelReady = false
                                 messages.add(
                                     ChatMessage(
@@ -827,6 +824,33 @@ private fun PocketAiApp() {
 
                             scope.launch {
                                 try {
+                                    var prompt = textPrompt
+
+                                    if (isImage && attachment != null) {
+                                        messages[answerIndex] = ChatMessage(
+                                            "Recognising image…",
+                                            false
+                                        )
+
+                                        val labels = ImageRecognizer.recognize(
+                                            attachment.path
+                                        )
+
+                                        // Chat model not installed: show the labels directly.
+                                        if (!modelFile.exists()) {
+                                            messages[answerIndex] = ChatMessage(
+                                                ImageRecognizer.describe(labels),
+                                                false
+                                            )
+                                            return@launch
+                                        }
+
+                                        prompt = ImageRecognizer.buildPrompt(
+                                            userText,
+                                            labels
+                                        )
+                                    }
+
                                     val request =
                                         OneTimeWorkRequestBuilder<AiTaskWorker>()
                                             .setInputData(
