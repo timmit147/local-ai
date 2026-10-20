@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.pocketai"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -57,6 +57,9 @@ dependencies {
 
     // Required for background model downloads and notifications
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Offline image recognition (model is bundled in the APK, no internet needed)
+    implementation("com.google.mlkit:image-labeling:17.0.9")
 
     // Existing local AI inference library
     implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
